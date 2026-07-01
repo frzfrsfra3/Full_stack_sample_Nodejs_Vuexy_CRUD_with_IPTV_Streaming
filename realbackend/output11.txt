@@ -1,0 +1,912 @@
+﻿
+=== FILTERED TREE ===
+
+[DIR] E:\newiptv\realbackend
+  |-- .env
+  |-- knexfile.js
+  |-- setup.js
+
+[DIR] E:\newiptv\realbackend\migrations
+  |-- 001_create_users_table.js
+  |-- 002_create_tv_profiles_table.js
+  |-- 003_create_tv_table.js
+  |-- 004_create_streams_table.js
+  |-- 005_add_last_name_to_users.js
+
+[DIR] E:\newiptv\realbackend\seeds
+  |-- 001_seed_initial_data.js
+  |-- 002_seed_tv_table.js
+
+[DIR] E:\newiptv\realbackend\src
+  |-- app.js
+
+[DIR] E:\newiptv\realbackend\src\config
+  |-- db.js
+  |-- ffmpeg.js
+
+[DIR] E:\newiptv\realbackend\src\events
+  |-- socket.js
+
+[DIR] E:\newiptv\realbackend\src\middleware
+  |-- auth.js
+
+[DIR] E:\newiptv\realbackend\src\modules\auth
+  |-- auth.controller.js
+
+[DIR] E:\newiptv\realbackend\src\modules\profiles
+  |-- profile.controller.js
+  |-- profile.service.js
+
+[DIR] E:\newiptv\realbackend\src\modules\streams
+  |-- hlsProxy.controller.js
+  |-- stream.controller.js
+  |-- stream.service.js
+
+[DIR] E:\newiptv\realbackend\src\modules\tv
+  |-- tv.controller.js
+  |-- tv.service.js
+
+[DIR] E:\newiptv\realbackend\src\routes
+  |-- api.js
+
+[DIR] E:\newiptv\realbackend\src\services
+  |-- ffmpegManager.js
+
+=== FILE CONTENT ===
+
+===== E:\newiptv\realbackend\.env =====
+PORT=3000
+JWT_SECRET=your-secret-key
+DB_HOST=localhost
+DB_USER=root
+DB_PASSWORD=
+DB_NAME=iptv
+HLS_BASE_PATH=/var/www/stream/channels
+FFMPEG_BINARY=/usr/bin/ffmpeg
+
+===== E:\newiptv\realbackend\knexfile.js =====
+require('dotenv').config();
+module.exports = {
+  client: 'mysql2',
+  connection: {
+    host: process.env.DB_HOST,
+    user: process.env.DB_USER,
+    password: process.env.DB_PASSWORD,
+    database: process.env.DB_NAME,
+  },
+  migrations: {
+    directory: './migrations',
+  },
+  seeds: {
+    directory: './seeds',
+  },
+};
+
+===== E:\newiptv\realbackend\setup.js =====
+require('dotenv').config();
+const knex = require('knex');
+const bcrypt = require('bcryptjs');
+const DB_NAME = process.env.DB_NAME || 'iptv';
+const initKnex = knex({
+  client: 'mysql2',
+  connection: {
+    host: process.env.DB_HOST,
+    user: process.env.DB_USER,
+    password: process.env.DB_PASSWORD,
+  },
+});
+async function setup() {
+  try {
+    console.log('Creating database if not exists...');
+    await initKnex.raw(`CREATE DATABASE IF NOT EXISTS \`${DB_NAME}\``);
+    await initKnex.destroy();
+    const db = knex({
+      client: 'mysql2',
+      connection: {
+        host: process.env.DB_HOST,
+        user: process.env.DB_USER,
+        password: process.env.DB_PASSWORD,
+        database: DB_NAME,
+      },
+      migrations: {
+        directory: './migrations',
+      },
+      seeds: {
+        directory: './seeds',
+      },
+    });
+    console.log('Running migrations...');
+    await db.migrate.latest();
+    console.log('Running seeds...');
+    await db.seed.run();
+    console.log('Setup complete!');
+    await db.destroy();
+  } catch (err) {
+    console.error('Setup failed:', err);
+    process.exit(1);
+  }
+}
+setup();
+
+===== E:\newiptv\realbackend\migrations\001_create_users_table.js =====
+exports.up = function (knex) {
+  return knex.schema.createTable('users', (table) => {
+    table.increments('id');
+    table.string('name').notNullable();
+    table.string('email').unique().notNullable();
+    table.string('password').notNullable();
+    table.timestamps();
+  });
+};
+exports.down = function (knex) {
+  return knex.schema.dropTableIfExists('users');
+};
+
+===== E:\newiptv\realbackend\migrations\002_create_tv_profiles_table.js =====
+exports.up = function (knex) {
+  return knex.schema.createTable('tv_profiles', (table) => {
+    table.increments('id');
+    table.string('title');
+    table.string('profile_type');
+    table.integer('days').unsigned().defaultTo(1);
+    table.decimal('price_usd', 10, 2).defaultTo(0);
+    table.timestamps();
+  });
+};
+exports.down = function (knex) {
+  return knex.schema.dropTableIfExists('tv_profiles');
+};
+
+===== E:\newiptv\realbackend\migrations\003_create_tv_table.js =====
+exports.up = function (knex) {
+  return knex.schema.createTable('tv', (table) => {
+    table.increments('id');
+    table.string('first_name');
+    table.string('last_name');
+    table.string('username').unique();
+    table.string('password');
+    table.string('phone_number');
+    table.integer('profile_id').unsigned().references('id').inTable('tv_profiles');
+    table.date('expired_date');
+    table.string('mac_address').nullable();
+    table.string('device_number').nullable();
+    table.boolean('status').defaultTo(true);
+    table.string('activate_status').defaultTo('pending');
+    table.date('activated_date').nullable();
+    table.text('last_activation_data').nullable();
+    table.string('stream_token', 64).unique().nullable();
+    table.integer('activated_by_id').unsigned().nullable().references('id').inTable('users');
+    table.timestamps();
+  });
+};
+exports.down = function (knex) {
+  return knex.schema.dropTableIfExists('tv');
+};
+
+===== E:\newiptv\realbackend\migrations\004_create_streams_table.js =====
+exports.up = function (knex) {
+  return knex.schema.createTable('streams', (table) => {
+    table.increments('id');
+    table.string('title');
+    table.string('slug').unique();
+    table.integer('profile_id').unsigned().nullable().references('id').inTable('tv_profiles');
+    table.text('source_url').nullable();
+    table.string('source_type').defaultTo('hls');
+    table.string('status').defaultTo('inactive');
+    table.integer('created_by').unsigned().nullable().references('id').inTable('users');
+    table.integer('pid').nullable();
+    table.timestamps();
+  });
+};
+exports.down = function (knex) {
+  return knex.schema.dropTableIfExists('streams');
+};
+
+===== E:\newiptv\realbackend\migrations\005_add_last_name_to_users.js =====
+exports.up = function (knex) {
+  return knex.schema.table('users', (table) => {
+    table.string('last_name').nullable();
+  });
+};
+exports.down = function (knex) {
+  return knex.schema.table('users', (table) => {
+    table.dropColumn('last_name');
+  });
+};
+
+===== E:\newiptv\realbackend\seeds\001_seed_initial_data.js =====
+const bcrypt = require('bcryptjs');
+exports.seed = async function (knex) {
+  await knex('streams').del();
+  await knex('tv').del();
+  await knex('tv_profiles').del();
+  await knex('users').del();
+  const hashedPassword = await bcrypt.hash('password', 10); 
+  const [adminId] = await knex('users').insert({
+    name: 'Admin',
+    email: 'admin@example.com',
+    password: hashedPassword,
+  });
+  await knex('tv_profiles').insert([
+    { title: 'Basic Package', profile_type: 'basic', days: 30, price_usd: 25.00 },
+    { title: 'Standard Package', profile_type: 'standard', days: 30, price_usd: 45.00 },
+    { title: 'Premium Package', profile_type: 'premium', days: 30, price_usd: 65.00 },
+    { title: 'Ultra Package', profile_type: 'ultra', days: 30, price_usd: 90.00 },
+  ]);
+};
+
+===== E:\newiptv\realbackend\seeds\002_seed_tv_table.js =====
+const bcrypt = require('bcryptjs');
+const { faker } = require('@faker-js/faker'); 
+exports.seed = async function (knex) {
+  await knex('tv').del();
+  const profiles = await knex('tv_profiles').select('id', 'days');
+  if (!profiles.length) {
+    console.log('No TV profiles found. Please seed profiles first.');
+    return;
+  }
+  const admin = await knex('users').first();
+  const activatorId = admin ? admin.id : null;
+  const records = [];
+  for (let i = 0; i < 1000; i++) {
+    const first = faker.person.firstName();
+    const last = faker.person.lastName();
+    const phone = faker.phone.number('+963 9
+    const username = `${phone.slice(-4)}${Math.floor(Date.now() / 1000).toString().slice(5)}samtv`;
+    const password = 'tvpass123';                       
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const profile = profiles[Math.floor(Math.random() * profiles.length)];
+    const expiredDate = new Date();
+    expiredDate.setDate(expiredDate.getDate() + profile.days);
+    records.push({
+      first_name: first,
+      last_name: last,
+      username: username,
+      password: hashedPassword,
+      phone_number: phone,
+      profile_id: profile.id,
+      expired_date: expiredDate.toISOString().split('T')[0],
+      mac_address: null,
+      device_number: `DEV${String(i + 1).padStart(6, '0')}`,
+      status: 1,
+      activate_status: 'active',
+      activated_date: new Date().toISOString().split('T')[0],
+      activated_by_id: activatorId,
+    });
+  }
+  await knex.batchInsert('tv', records, 100);
+  console.log('Inserted 1000 random TV customers.');
+};
+
+===== E:\newiptv\realbackend\src\app.js =====
+require('dotenv').config();
+const express = require('express');
+const cors = require('cors');
+const morgan = require('morgan');
+const http = require('http');
+const socketIo = require('socket.io');
+const apiRoutes = require('./routes/api');
+const { setupSocket } = require('./events/socket');
+const app = express();
+app.use(cors());
+app.use(morgan('dev'));
+app.use(express.json());
+app.use('/api', apiRoutes);
+const server = http.createServer(app);
+const io = socketIo(server, { cors: { origin: '*' } });
+setupSocket(io);
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => console.log(`Backend running on port ${PORT}`));
+
+===== E:\newiptv\realbackend\src\config\db.js =====
+const knex = require('knex');
+const config = {
+  client: 'mysql2',
+  connection: {
+    host: process.env.DB_HOST,
+    user: process.env.DB_USER,
+    password: process.env.DB_PASSWORD,
+    database: process.env.DB_NAME,
+  },
+};
+module.exports = knex(config);
+
+===== E:\newiptv\realbackend\src\config\ffmpeg.js =====
+module.exports = {
+    binary: process.env.FFMPEG_BINARY || '/usr/bin/ffmpeg',
+    hlsBasePath: process.env.HLS_BASE_PATH || '/var/www/stream/channels',
+    hlsTime: 4,
+    hlsListSize: 6,
+};
+
+===== E:\newiptv\realbackend\src\events\socket.js =====
+let io;
+module.exports = {
+  setupSocket: (socketIo) => {
+    io = socketIo;
+    io.on('connection', (socket) => {
+      console.log('Client connected:', socket.id);
+    });
+  },
+  getIO: () => io,
+};
+
+===== E:\newiptv\realbackend\src\middleware\auth.js =====
+const jwt = require('jsonwebtoken');
+module.exports = (req, res, next) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader) return res.status(401).json({ message: 'No token' });
+  const token = authHeader.split(' ')[1];
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    req.user = decoded;
+    next();
+  } catch (err) {
+    res.status(401).json({ message: 'Invalid token' });
+  }
+};
+
+===== E:\newiptv\realbackend\src\modules\auth\auth.controller.js =====
+const jwt = require('jsonwebtoken');
+const bcrypt = require('bcryptjs');
+const db = require('../../config/db'); 
+exports.login = async (req, res) => {
+  const { email, password } = req.body;
+  try {
+    const [user] = await db('users').where('email', email);
+    if (!user) return res.status(401).json({ message: 'Invalid credentials' });
+    const valid = await bcrypt.compare(password, user.password);
+    if (!valid) return res.status(401).json({ message: 'Invalid credentials' });
+    const token = jwt.sign({ id: user.id, email: user.email }, process.env.JWT_SECRET, { expiresIn: '1d' });
+    res.json({ token, user: { id: user.id, name: user.name, email: user.email } });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+===== E:\newiptv\realbackend\src\modules\profiles\profile.controller.js =====
+const profileService = require('./profile.service')
+exports.index = async (req, res) => {
+  try {
+    const result = await profileService.getAll(req.body)
+    res.json(result)
+  } catch (e) { res.status(500).json({ message: e.message }) }
+}
+exports.create = async (req, res) => {
+  try {
+    const result = await profileService.create(req.body)
+    res.status(201).json({ message: 'Created', data: result })
+  } catch (e) { res.status(400).json({ message: e.message }) }
+}
+exports.getById = async (req, res) => {
+  try {
+    const profile = await profileService.getById(req.params.id)
+    if (!profile) return res.status(404).json({ message: 'Not found' })
+    res.json(profile)
+  } catch (e) { res.status(500).json({ message: e.message }) }
+}
+exports.update = async (req, res) => {
+  try {
+    const result = await profileService.update(req.body.id, req.body)
+    res.json({ message: 'Updated', data: result })
+  } catch (e) { res.status(400).json({ message: e.message }) }
+}
+exports.delete = async (req, res) => {
+  try {
+    await profileService.delete(req.body.id)
+    res.json({ message: 'Deleted' })
+  } catch (e) { res.status(400).json({ message: e.message }) }
+}
+
+===== E:\newiptv\realbackend\src\modules\profiles\profile.service.js =====
+const db = require('../../config/db')
+exports.getAll = async (params = {}) => {
+  const { page = 1, per_page = 10, q } = params;
+  const offset = (page - 1) * per_page;
+  let query = db('tv_profiles').orderBy('id');
+  if (q) query = query.where('title', 'like', `%${q}%`);
+  const total = await query.clone().count('* as count').first();
+  const data = await query.limit(per_page).offset(offset);
+  return {
+    data,
+    current_page: page,
+    per_page,
+    total: total.count,
+    last_page: Math.ceil(total.count / per_page),
+  };
+};
+exports.create = async (data) => {
+  const [id] = await db('tv_profiles').insert(data)
+  return { id, ...data }
+}
+exports.getById = async (id) => {
+  return db('tv_profiles').where('id', id).first()
+}
+exports.update = async (id, data) => {
+  await db('tv_profiles').where('id', id).update(data)
+  return { id, ...data }
+}
+exports.delete = async (id) => {
+  return db('tv_profiles').where('id', id).del()
+}
+
+===== E:\newiptv\realbackend\src\modules\streams\hlsProxy.controller.js =====
+const bcrypt = require('bcryptjs');
+const db = require('../../config/db');
+const path = require('path');
+const fs = require('fs');
+const ffmpegConfig = require('../../config/ffmpeg');
+exports.auth = async (req, res) => {
+  const token = req.headers['x-token'] || req.query.token;
+  if (!token) return res.status(401).send('Unauthorized');
+  const [tv] = await db('tv').where('stream_token', token).where('status', 1).whereRaw('expired_date > NOW()');
+  if (!tv) return res.status(403).send('Forbidden');
+  res.status(200).send('OK');
+};
+exports.check = async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Basic ')) return res.status(401).send('Authorization Required');
+  const base64 = authHeader.slice(6);
+  const [username, password] = Buffer.from(base64, 'base64').toString().split(':');
+  const [tv] = await db('tv').where('username', username);
+  if (!tv || !(await bcrypt.compare(password, tv.password))) return res.status(401).send('Invalid credentials');
+  if (!tv.status || new Date(tv.expired_date) <= new Date() || tv.activate_status !== 'active')
+    return res.status(403).send('Subscription expired / inactive');
+  const slug = req.params.slug || req.headers['x-stream-slug'];
+  if (slug) {
+    const [stream] = await db('streams').where('slug', slug);
+    if (stream && stream.profile_id && tv.profile_id !== stream.profile_id)
+      return res.status(403).send('Stream not allowed');
+  }
+  res.status(200).send('OK');
+};
+exports.proxy = async (req, res) => {
+  const { username, password } = req.query;
+  if (!username || !password) return res.status(400).send('Missing credentials');
+  const [tv] = await db('tv').where('username', username);
+  if (!tv || !(await bcrypt.compare(password, tv.password))) return res.status(401).send('Invalid credentials');
+  const filePath = path.join(ffmpegConfig.hlsBasePath, req.params.slug, req.params.file);
+  if (!fs.existsSync(filePath)) return res.status(404).send('File not found');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Content-Type', req.params.file.endsWith('.m3u8') ? 'application/vnd.apple.mpegurl' : 'video/MP2T');
+  fs.createReadStream(filePath).pipe(res);
+};
+
+===== E:\newiptv\realbackend\src\modules\streams\stream.controller.js =====
+const streamService = require('./stream.service');
+exports.index = async (req, res) => {
+  try {
+    const result = await streamService.getAll(req.query);
+    res.json(result);
+  } catch (e) { res.status(500).json({ message: e.message }); }
+};
+exports.store = async (req, res) => {
+  try {
+    const data = req.body;
+    data.created_by = req.user.id;
+    const stream = await streamService.create(data);
+    res.status(201).json({ message: 'Stream created', data: stream });
+  } catch (e) { res.status(400).json({ message: e.message }); }
+};
+exports.show = async (req, res) => {
+  const stream = await streamService.getById(req.params.id);
+  if (!stream) return res.status(404).json({ message: 'Not found' });
+  res.json(stream);
+};
+exports.update = async (req, res) => {
+  try {
+    const stream = await streamService.update(req.params.id, req.body);
+    res.json({ message: 'Updated', data: stream });
+  } catch (e) { res.status(400).json({ message: e.message }); }
+};
+exports.destroy = async (req, res) => {
+  try {
+    await streamService.delete(req.params.id);
+    res.json({ message: 'Deleted' });
+  } catch (e) { res.status(400).json({ message: e.message }); }
+};
+exports.start = async (req, res) => {
+  try {
+    const result = await streamService.start(req.params.id);
+    res.json({ message: 'Stream will start', ...result });
+  } catch (e) { res.status(409).json({ message: e.message }); }
+};
+exports.stop = async (req, res) => {
+  try {
+    await streamService.stop(req.params.id);
+    res.json({ message: 'Stream stopped' });
+  } catch (e) { res.status(400).json({ message: e.message }); }
+};
+
+===== E:\newiptv\realbackend\src\modules\streams\stream.service.js =====
+const db = require('../../config/db');
+const ffmpegManager = require('../../services/ffmpegManager');
+const { getIO } = require('../../events/socket');
+const broadcastStatus = (stream) => {
+  const io = getIO();
+  if (io) io.emit('stream.status.changed', { stream });
+};
+exports.getAll = async ({ page = 1, per_page = 10 }) => {
+  const offset = (page - 1) * per_page;
+  const total = await db('streams').count('* as count').first();
+  const data = await db('streams')
+    .leftJoin('tv_profiles', 'streams.profile_id', 'tv_profiles.id')
+    .select('streams.*', 'tv_profiles.title as profile_title')
+    .limit(per_page).offset(offset).orderBy('streams.id', 'desc');
+  return {
+    data: data.map(s => ({ ...s, profile: s.profile_id ? { id: s.profile_id, title: s.profile_title } : null })),
+    current_page: page,
+    per_page,
+    total: total.count,
+    last_page: Math.ceil(total.count / per_page),
+  };
+};
+exports.create = async (data) => {
+  const [id] = await db('streams').insert({
+    title: data.title,
+    slug: data.slug,
+    source_url: data.source_url,
+    source_type: data.source_type,
+    profile_id: data.profile_id || null,
+    created_by: data.created_by,
+    status: 'inactive',
+  });
+  return { id, ...data, status: 'inactive' };
+};
+exports.start = async (id) => {
+  const stream = await db('streams').where('id', id).first();
+  if (!stream) throw new Error('Stream not found');
+  if (['active', 'starting'].includes(stream.status)) throw new Error('Already running');
+  await db('streams').where('id', id).update({ status: 'starting' });
+  broadcastStatus({ id, status: 'starting' });
+  ffmpegManager.startStream(stream).then(pid => {
+    return db('streams').where('id', id).update({ pid, status: 'active' });
+  }).then(() => {
+    broadcastStatus({ id, status: 'active' });
+  }).catch(err => {
+    db('streams').where('id', id).update({ status: 'inactive', pid: null });
+    broadcastStatus({ id, status: 'inactive' });
+  });
+  return { stream_id: id, status: 'starting' };
+};
+exports.stop = async (id) => {
+  const stream = await db('streams').where('id', id).first();
+  if (!stream) throw new Error('Stream not found');
+  ffmpegManager.stopStream(stream);
+  await db('streams').where('id', id).update({ pid: null, status: 'inactive' });
+  broadcastStatus({ id, status: 'inactive' });
+};
+
+===== E:\newiptv\realbackend\src\modules\tv\tv.controller.js =====
+const tvService = require('./tv.service');
+exports.index = async (req, res) => {
+  try {
+    const result = await tvService.getCustomers(req.body);
+    res.json(result);
+  } catch (e) { res.status(500).json({ message: e.message }); }
+};
+exports.pending = async (req, res) => {
+  try {
+    const result = await tvService.getPendingCustomers(req.body);
+    res.json(result);
+  } catch (e) { res.status(500).json({ message: e.message }); }
+};
+exports.getProfiles = async (req, res) => {
+  try {
+    const profiles = await tvService.getProfilesForActivation(req.user);
+    res.json(profiles);
+  } catch (e) { res.status(500).json({ message: e.message }); }
+};
+exports.create = async (req, res) => {
+  try {
+    const data = req.body;
+    const tv = await tvService.createCustomer(data, req.user.id);
+    res.status(201).json({ message: 'Customer created', data: tv });
+  } catch (e) { res.status(400).json({ message: e.message }); }
+};
+exports.getById = async (req, res) => {
+  try {
+    const data = await tvService.getCustomerById(req.params.id, req.user);
+    res.json(data);
+  } catch (e) { res.status(404).json({ message: e.message }); }
+};
+exports.update = async (req, res) => {
+  try {
+    const result = await tvService.updateCustomer(req.body, req.user);
+    res.json({ message: 'Updated', data: result });
+  } catch (e) { res.status(400).json({ message: e.message }); }
+};
+exports.activate = async (req, res) => {
+  try {
+    const result = await tvService.activateCustomer(req.body, req.user);
+    res.json({ message: 'Activated', data: result });
+  } catch (e) { res.status(400).json({ message: e.message }); }
+};
+exports.destroy = async (req, res) => {
+  try {
+    await tvService.deleteCustomer(req.body.id);
+    res.json({ message: 'Deleted' });
+  } catch (e) { res.status(400).json({ message: e.message }); }
+};
+exports.activateOrCancel = async (req, res) => {
+  try {
+    const result = await tvService.activateOrCancel(req.body);
+    res.json({ message: 'Status updated', data: result });
+  } catch (e) { res.status(400).json({ message: e.message }); }
+};
+
+===== E:\newiptv\realbackend\src\modules\tv\tv.service.js =====
+const db = require('../../config/db');
+const bcrypt = require('bcryptjs');
+function computeActivateStatusExp(activateStatus, expiredDate) {
+  if (activateStatus === 'new') return 'new';
+  if (activateStatus === 'pending') return 'pending';
+  if (new Date(expiredDate) < new Date()) return 'expired';
+  if (activateStatus === 'cancel') return 'cancel';
+  return 'active';
+}
+const paginate = async (baseQuery, page, per_page) => {
+  const offset = (page - 1) * per_page;
+  const total = await baseQuery.clone().count('* as count').first();
+  const data = await baseQuery.limit(per_page).offset(offset);
+  return {
+    data,
+    current_page: page,
+    per_page,
+    total: total.count,
+    last_page: Math.ceil(total.count / per_page),
+  };
+};
+function enrichTvRows(rows) {
+  return rows.map(tv => ({
+    ...tv,
+    activate_status_exp: computeActivateStatusExp(tv.activate_status, tv.expired_date),
+    activated_by: tv.activator_name ? {
+      name: tv.activator_name,
+      last_name: tv.activator_last_name,
+      branch: null
+    } : null
+  }));
+}
+exports.getCustomers = async ({ page = 1, page_size, per_page = 10, q } = {}) => {
+  per_page = page_size || per_page;
+  const offset = (page - 1) * per_page;
+  let query = db('tv')
+    .leftJoin('users', 'tv.activated_by_id', 'users.id')
+    .select(
+      'tv.*',
+      'users.name as activator_name',
+      'users.last_name as activator_last_name'
+    )
+    .orderBy('tv.id', 'desc');
+  if (q) query = query.where('tv.first_name', 'like', `%${q}%`).orWhere('tv.last_name', 'like', `%${q}%`);
+  const totalQuery = db('tv')
+    .leftJoin('users', 'tv.activated_by_id', 'users.id')
+    .select(db.raw('count(*) as count'));
+  if (q) totalQuery.where('tv.first_name', 'like', `%${q}%`).orWhere('tv.last_name', 'like', `%${q}%`);
+  const total = await totalQuery.first();
+  const data = await query.limit(per_page).offset(offset);
+  return {
+    data: enrichTvRows(data),
+    current_page: page,
+    per_page,
+    total: total.count,
+    last_page: Math.ceil(total.count / per_page),
+  };
+};
+exports.getPendingCustomers = async ({ page = 1, page_size, per_page = 10, q } = {}) => {
+  per_page = page_size || per_page;
+  const offset = (page - 1) * per_page;
+  let query = db('tv')
+    .leftJoin('users', 'tv.activated_by_id', 'users.id')
+    .select(
+      'tv.*',
+      'users.name as activator_name',
+      'users.last_name as activator_last_name'
+    )
+    .where('tv.activate_status', 'pending')
+    .orderBy('tv.id', 'desc');
+  if (q) query = query.where('tv.first_name', 'like', `%${q}%`).orWhere('tv.last_name', 'like', `%${q}%`);
+  const totalQuery = db('tv')
+    .leftJoin('users', 'tv.activated_by_id', 'users.id')
+    .where('tv.activate_status', 'pending');
+  if (q) totalQuery.where('tv.first_name', 'like', `%${q}%`).orWhere('tv.last_name', 'like', `%${q}%`);
+  const total = await totalQuery.count('* as count').first();
+  const data = await query.limit(per_page).offset(offset);
+  return {
+    data: enrichTvRows(data),
+    current_page: page,
+    per_page,
+    total: total.count,
+    last_page: Math.ceil(total.count / per_page),
+  };
+};
+exports.getProfilesForActivation = async (user) => {
+  const profiles = await db('tv_profiles').select('id', 'title', 'days', 'price_usd');
+  return {
+    profiles,
+    user_infos: {},
+  };
+};
+exports.createCustomer = async (data, userId) => {
+  const profile = await db('tv_profiles').where('id', data.profile_id).first();
+  if (!profile) throw new Error('Profile not found');
+  const expiredDate = new Date();
+  expiredDate.setDate(expiredDate.getDate() + profile.days);
+  const hashedPassword = await bcrypt.hash(data.password, 10);
+  const insertData = {
+    first_name: data.first_name,
+    last_name: data.last_name,
+    username: data.username,
+    password: hashedPassword,
+    phone_number: data.phone_number,
+    profile_id: data.profile_id,
+    expired_date: expiredDate.toISOString().split('T')[0],
+    mac_address: data.mac_address || null,
+    device_number: data.device_number || null,
+    status: 1,
+    activated_by_id: userId,
+    activate_status: 'active',
+    activated_date: new Date().toISOString().split('T')[0],
+  };
+  const [id] = await db('tv').insert(insertData);
+  return { id, ...insertData };
+};
+exports.getCustomerById = async (id) => {
+  const tv = await db('tv').where('id', id).first();
+  if (!tv) throw new Error('Customer not found');
+  return {
+    tv,
+    profiles: await db('tv_profiles').select('id', 'title'),
+    user_infos: {}
+  };
+};
+exports.updateCustomer = async (data, user) => {
+  const customer = await db('tv').where('id', data.id).first();
+  if (!customer) throw new Error('Not found');
+  if (data.password) data.password = await bcrypt.hash(data.password, 10);
+  else delete data.password;
+  await db('tv').where('id', data.id).update(data);
+  return { id: data.id, ...data };
+};
+exports.activateCustomer = async (data, user) => {
+  const customer = await db('tv').where('id', data.id).first();
+  if (!customer) throw new Error('Not found');
+  const profile = await db('tv_profiles').where('id', data.profile_id).first();
+  if (!profile) throw new Error('Profile not found');
+  const newExpiry = new Date(customer.expired_date);
+  newExpiry.setDate(newExpiry.getDate() + profile.days);
+  await db('tv').where('id', data.id).update({
+    profile_id: data.profile_id,
+    activate_status: 'active',
+    activated_date: new Date().toISOString().split('T')[0],
+    expired_date: newExpiry.toISOString().split('T')[0],
+    status: 1,
+  });
+  return { id: data.id, activate_status: 'active' };
+};
+exports.deleteCustomer = async (id) => {
+  await db('tv').where('id', id).del();
+};
+exports.activateOrCancel = async ({ id, status }) => {
+  const customer = await db('tv').where('id', id).first();
+  if (!customer) throw new Error('Not found');
+  if (status === 'active') {
+    const profile = await db('tv_profiles').where('id', customer.profile_id).first();
+    const newExpiry = new Date(customer.expired_date);
+    newExpiry.setDate(newExpiry.getDate() + (profile?.days || 0));
+    await db('tv').where('id', id).update({
+      activate_status: 'active',
+      expired_date: newExpiry.toISOString().split('T')[0],
+      status: 1,
+    });
+  } else {
+    await db('tv').where('id', id).update({ activate_status: status });
+  }
+  return { id, activate_status: status };
+};
+
+===== E:\newiptv\realbackend\src\routes\api.js =====
+const express = require('express');
+const router = express.Router();
+const authMiddleware = require('../middleware/auth');
+const authController = require('../modules/auth/auth.controller');
+router.post('/auth/login', authController.login);
+const tvController = require('../modules/tv/tv.controller');
+router.post('/tvs/index', authMiddleware, tvController.index);
+router.post('/tvs/pending', authMiddleware, tvController.pending);
+router.get('/tvs/get_profiles', authMiddleware, tvController.getProfiles);
+router.post('/tvs/create', authMiddleware, tvController.create);
+router.get('/tvs/get/:id', authMiddleware, tvController.getById);
+router.post('/tvs/update', authMiddleware, tvController.update);
+router.post('/tvs/activate', authMiddleware, tvController.activate);
+router.post('/tvs/delete', authMiddleware, tvController.destroy);
+router.post('/tvs/activate_or_cancel', authMiddleware, tvController.activateOrCancel);
+const profileController = require('../modules/profiles/profile.controller');
+router.post('/tv_profiles/index', authMiddleware, profileController.index);
+router.post('/tv_profiles/create', authMiddleware, profileController.create);
+router.get('/tv_profiles/get/:id', authMiddleware, profileController.getById);
+router.post('/tv_profiles/update', authMiddleware, profileController.update);
+router.post('/tv_profiles/delete', authMiddleware, profileController.delete);
+const streamController = require('../modules/streams/stream.controller');
+router.get('/streams', authMiddleware, streamController.index);
+router.post('/streams', authMiddleware, streamController.store);
+router.get('/streams/:id', authMiddleware, streamController.show);
+router.put('/streams/:id', authMiddleware, streamController.update);
+router.delete('/streams/:id', authMiddleware, streamController.destroy);
+router.post('/streams/:id/start', authMiddleware, streamController.start);
+router.post('/streams/:id/stop', authMiddleware, streamController.stop);
+const hlsProxyController = require('../modules/streams/hlsProxy.controller');
+router.get('/stream/auth', hlsProxyController.auth); 
+router.get('/stream-auth-check', hlsProxyController.check);
+router.get('/stream-auth-check/:slug', hlsProxyController.check);
+router.get('/hls-proxy/:slug/:file', hlsProxyController.proxy);
+module.exports = router;
+
+===== E:\newiptv\realbackend\src\services\ffmpegManager.js =====
+const { spawn } = require('child_process');
+const path = require('path');
+const fs = require('fs');
+const ffmpegConfig = require('../config/ffmpeg');
+class FFmpegManager {
+  constructor() {
+    this.binary = ffmpegConfig.binary;
+    this.hlsBasePath = ffmpegConfig.hlsBasePath;
+    this.activeProcesses = new Map(); 
+  }
+  startStream(stream) {
+    return new Promise((resolve, reject) => {
+      const outputDir = path.join(this.hlsBasePath, stream.slug);
+      fs.mkdirSync(outputDir, { recursive: true });
+      fs.readdirSync(outputDir).forEach(f => fs.unlinkSync(path.join(outputDir, f)));
+      const args = [
+        '-hide_banner', '-loglevel', 'warning',
+        '-user_agent', 'VLC/3.0.18',
+        '-reconnect', '1', '-reconnect_streamed', '1', '-reconnect_delay_max', '10',
+        '-i', stream.source_url,
+        '-c', 'copy',
+        '-f', 'hls',
+        `-hls_time`, `${ffmpegConfig.hlsTime}`,
+        '-hls_list_size', `${ffmpegConfig.hlsListSize}`,
+        '-hls_flags', 'delete_segments+append_list+omit_endlist',
+        '-hls_segment_type', 'mpegts',
+        '-hls_segment_filename', path.join(outputDir, 'index%d.ts'),
+        path.join(outputDir, 'index.m3u8')
+      ];
+      const child = spawn(this.binary, args, {
+        detached: true,
+        stdio: ['ignore', 'pipe', 'pipe']
+      });
+      child.stderr.on('data', data => {
+      });
+      child.on('error', err => {
+        reject(err);
+      });
+      child.on('close', code => {
+        this.activeProcesses.delete(stream.id);
+      });
+      this.activeProcesses.set(stream.id, { child, pid: child.pid });
+      setTimeout(() => {
+        resolve(child.pid);
+      }, 2000);
+      child.unref();
+    });
+  }
+  stopStream(stream) {
+    const record = this.activeProcesses.get(stream.id);
+    if (record) {
+      try { process.kill(-record.pid, 'SIGTERM'); } catch(e) {}
+      record.child.kill('SIGTERM');
+      this.activeProcesses.delete(stream.id);
+    } else if (stream.pid) {
+      try { process.kill(stream.pid, 'SIGTERM'); } catch(e) {}
+    }
+    const outputDir = path.join(this.hlsBasePath, stream.slug);
+    if (fs.existsSync(outputDir)) {
+      fs.readdirSync(outputDir).forEach(f => fs.unlinkSync(path.join(outputDir, f)));
+    }
+  }
+  checkAndRestart() {
+  }
+}
+module.exports = new FFmpegManager();

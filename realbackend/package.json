@@ -1,0 +1,33 @@
+{
+  "name": "realbackend",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "start": "node src/app.js",
+    "dev": "nodemon src/app.js",
+    "seed-tv": "node -e \"require('./seeds/002_seed_tv_table').seed(require('./src/config/db'))\""
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@faker-js/faker": "^10.4.0",
+    "@ffmpeg-installer/ffmpeg": "^1.1.0",
+    "bcryptjs": "^3.0.3",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "fluent-ffmpeg": "^2.1.3",
+    "jsonwebtoken": "^9.0.3",
+    "knex": "^3.2.10",
+    "morgan": "^1.10.1",
+    "mysql2": "^3.22.3",
+    "objection": "^3.1.5",
+    "socket.io": "^4.8.3"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.0"
+  }
+}

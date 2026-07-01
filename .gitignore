@@ -1,0 +1,31 @@
+# dependencies
+*/node_modules/
+frontend/node_modules/
+realbackend/node_modules/
+# environment variables
+.env
+.env.local
+.env.*.local
+
+# build outputs
+dist/
+build/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+logs
+*.log
+npm-debug.log*
+
+# If any subfolder has its own git repo, ignore it to avoid nested repo issues
+**/.git/
